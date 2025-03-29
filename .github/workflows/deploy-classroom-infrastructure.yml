@@ -1,0 +1,87 @@
+name: Deploy Classroom Infrastructure
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'iac/classroom/**'
+      - 'scripts/**'
+      - '.github/workflows/deploy-classroom-infrastructure.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'iac/classroom/**'
+      - 'scripts/**'
+      - '.github/workflows/deploy-classroom-infrastructure.yml'
+
+env:
+  AWS_REGION: eu-west-1
+  TF_VERSION: '1.5.0'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'production' || 'development' }}
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Python Virtual Environment
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+          pip install -r scripts/requirements.txt
+
+      - name: Package Lambda Functions
+        run: |
+          source venv/bin/activate
+          bash scripts/package_lambdas.sh
+
+      - name: Generate Terraform Variables
+        run: |
+          source venv/bin/activate
+          bash scripts/generate_tfvars.sh ${{ github.actor }} ${{ github.ref_name }}
+
+      - name: Configure Terraform Backend
+        run: |
+          source venv/bin/activate
+          bash scripts/configure_backend.sh
+
+      - name: Terraform Init
+        run: |
+          cd iac/classroom
+          terraform init
+
+      - name: Terraform Plan
+        run: |
+          cd iac/classroom
+          terraform plan -out=tfplan
+
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main'
+        run: |
+          cd iac/classroom
+          terraform apply -auto-approve tfplan
+
+      - name: Terraform Plan Output
+        if: github.ref != 'refs/heads/main'
+        run: |
+          cd iac/classroom
+          terraform show tfplan 
